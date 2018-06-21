@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -56,7 +57,7 @@ func TestingT(testingT *testing.T) {
 	conf := &RunConf{
 		Filter:        *oldFilterFlag + *newFilterFlag,
 		Verbose:       *oldVerboseFlag || *newVerboseFlag,
-		Stream:        (*oldStreamFlag || *newStreamFlag) && (*suiteParallelismFlag <= 1),
+		Stream:        (*oldStreamFlag || *newStreamFlag),
 		Benchmark:     *oldBenchFlag || *newBenchFlag,
 		BenchmarkTime: benchTime,
 		BenchmarkMem:  *newBenchMem,
@@ -92,16 +93,36 @@ func RunAll(runConf *RunConf) *Result {
 	if p <= 0 {
 		p = 1
 	}
-	resCh := make(chan *Result)
+	mergePipes := p > 1 && runConf.Stream
+
+	type res struct {
+		r    *io.PipeReader
+		w    *io.PipeWriter
+		resp *Result
+	}
+	resCh := make(chan res)
 	for i := 0; i < p; i++ {
 		go func() {
 			for s := range queueCh {
-				resCh <- Run(s, runConf)
+				rc := *runConf
+				var r *io.PipeReader
+				var w *io.PipeWriter
+				if mergePipes {
+					r, w = io.Pipe()
+					rc.Output = w
+				}
+				resCh <- res{r, w, Run(s, &rc)}
 			}
 		}()
 	}
 	for i := 0; i < len(allSuites); i++ {
-		result.Add(<-resCh)
+		res := <-resCh
+		result.Add(res.resp)
+		if mergePipes {
+			io.Copy(runConf.Output, res.r)
+			res.r.Close()
+			res.w.Close()
+		}
 	}
 	return &result
 }
