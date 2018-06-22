@@ -2,9 +2,9 @@ package check
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
-	"io"
 	"os"
 	"testing"
 	"time"
@@ -96,8 +96,7 @@ func RunAll(runConf *RunConf) *Result {
 	mergePipes := p > 1 && runConf.Stream
 
 	type res struct {
-		r    *io.PipeReader
-		w    *io.PipeWriter
+		b    *bytes.Buffer
 		resp *Result
 	}
 	resCh := make(chan res)
@@ -105,13 +104,12 @@ func RunAll(runConf *RunConf) *Result {
 		go func() {
 			for s := range queueCh {
 				rc := *runConf
-				var r *io.PipeReader
-				var w *io.PipeWriter
+				var b *bytes.Buffer
 				if mergePipes {
-					r, w = io.Pipe()
-					rc.Output = w
+					b = new(bytes.Buffer)
+					rc.Output = b
 				}
-				resCh <- res{r, w, Run(s, &rc)}
+				resCh <- res{b, Run(s, &rc)}
 			}
 		}()
 	}
@@ -119,9 +117,7 @@ func RunAll(runConf *RunConf) *Result {
 		res := <-resCh
 		result.Add(res.resp)
 		if mergePipes {
-			io.Copy(runConf.Output, res.r)
-			res.r.Close()
-			res.w.Close()
+			res.b.WriteTo(os.Stdout)
 		}
 	}
 	return &result
